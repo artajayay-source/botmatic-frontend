@@ -11,13 +11,18 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="BotMatic">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 
 <!-- SEO -->
 <meta name="description" content="AI Chatbot WhatsApp otomatis untuk UMKM Indonesia. Setup 5 menit, bot aktif 24/7.">
 <meta property="og:title" content="BotMatic — Chatbot WhatsApp untuk UMKM">
 <meta property="og:description" content="Bot AI yang menjawab customer WA otomatis, disesuaikan dengan bisnis kamu.">
 <meta property="og:type" content="website">
+<meta property="og:image" content="https://botmatic-frontend.vercel.app/icon-512.png">
+<meta property="og:url" content="https://botmatic-frontend.vercel.app">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="BotMatic — Chatbot WhatsApp untuk UMKM">
+<meta name="twitter:image" content="https://botmatic-frontend.vercel.app/icon-512.png">
 
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
@@ -1087,7 +1092,7 @@
       <div class="fonnte-card-sub">Scan QR Code ini dengan WhatsApp nomor bisnis kamu</div>
 
       <div class="qr-wrap"><div class="qr-grid" id="qr-grid"></div></div>
-      <div class="qr-note">QR aktif selama 60 detik</div>
+      <div class="qr-note" id="qr-note">QR aktif selama 60 detik</div>
       <button class="qr-refresh" onclick="refreshQR()">🔄 Refresh QR</button>
     </div>
 
@@ -1135,10 +1140,9 @@
       </div>
     </div>
 
-    <button class="btn-primary" style="width:100%" onclick="simulateConnect()">
-      ✅ Simulasi: Bot Sudah Terhubung
+    <button class="btn-primary" id="btn-connect" style="width:100%;display:none" onclick="simulateConnect()">
+      ✅ Saya Sudah Scan QR
     </button>
-    <p class="sim-note">Untuk demo — dalam produk nyata ini otomatis setelah scan QR</p>
   </div>
 </div>
 
@@ -1291,7 +1295,18 @@ function validate(step) {
     val('biz-name') ? pass('err-biz-name','biz-name') : fail('err-biz-name','biz-name');
     val('biz-type') ? pass('err-biz-type') : fail('err-biz-type');
     val('biz-city') ? pass('err-biz-city','biz-city') : fail('err-biz-city','biz-city');
-    val('biz-wa')   ? pass('err-biz-wa','biz-wa')     : fail('err-biz-wa','biz-wa');
+    // Validasi nomor WA: harus angka, mulai 08 atau 628, panjang 10-14 digit
+    const waRaw = val('biz-wa').replace(/[\s\-\.]/g, '');
+    const waOk  = /^(08|628)\d{8,12}$/.test(waRaw);
+    if (!waRaw) {
+      fail('err-biz-wa','biz-wa');
+      document.getElementById('err-biz-wa').textContent = '⚠ Masukkan nomor WA bisnis';
+    } else if (!waOk) {
+      fail('err-biz-wa','biz-wa');
+      document.getElementById('err-biz-wa').textContent = '⚠ Format salah. Gunakan: 08xxx atau 628xxx';
+    } else {
+      pass('err-biz-wa','biz-wa');
+    }
   }
   if (step === 2) {
     const has = [...document.querySelectorAll('.prod-name')].some(i => i.value.trim());
@@ -1456,7 +1471,7 @@ async function submitToBackend() {
       description: S.bizDesc,
       location: S.bizCity,
       instagram: S.bizIg,
-      email: S.bizEmail || ''
+      email: ''
     },
     products: S.products.map(p => ({ name: p.name, price: p.price, description: '' })),
     brandVoice: S.brandVoice || 'santai',
@@ -1630,6 +1645,26 @@ function downloadAllScripts() {
 
 // ── QR REAL dari Fonnte ───────────────────────────────────────
 let _qrPollInterval = null;
+let _qrCountdownInterval = null;
+
+function _startQRCountdown() {
+  if (_qrCountdownInterval) clearInterval(_qrCountdownInterval);
+  let secs = 60;
+  const noteEl = document.getElementById('qr-note');
+  if (!noteEl) return;
+  noteEl.textContent = `QR aktif selama ${secs} detik`;
+  _qrCountdownInterval = setInterval(() => {
+    secs--;
+    if (noteEl) noteEl.textContent = `QR aktif selama ${secs} detik`;
+    if (secs <= 0) {
+      clearInterval(_qrCountdownInterval);
+      _qrCountdownInterval = null;
+      if (noteEl) noteEl.textContent = 'QR kedaluwarsa — klik Refresh';
+      // Auto refresh QR
+      refreshQR();
+    }
+  }, 1000);
+}
 
 async function generateQR() {
   const grid = document.getElementById('qr-grid');
@@ -1672,16 +1707,20 @@ async function generateQR() {
       // Simpan device token
       if (data.deviceToken) S.deviceToken = data.deviceToken;
 
+      // Mulai countdown 60 detik
+      _startQRCountdown();
+
       // Mulai polling status koneksi setiap 3 detik
       _startConnectionPolling();
 
     } else {
-      // Fallback: tampilkan instruksi manual
+      // Fallback: tampilkan instruksi manual + tampilkan tombol manual confirm
       grid.innerHTML = `<div style="grid-column:1/-1;padding:16px;text-align:center;color:var(--text2);font-size:12px;line-height:1.6;">
         <div style="font-size:28px;margin-bottom:8px;">📱</div>
         <strong style="color:var(--text);">Setup Manual</strong><br>
         Buka <b>app.fonnte.com</b> → Add Device → isi nomor <b>${S.bizWa}</b> → Connect → scan QR
       </div>`;
+      document.getElementById('btn-connect').style.display = 'block';
 
       // Tetap polling kalau sudah setup manual
       if (S.businessId) _startConnectionPolling();
@@ -1690,7 +1729,8 @@ async function generateQR() {
   } catch (err) {
     console.warn('QR fetch error:', err.message);
     _renderFakeQR(grid);
-    // Tetap polling
+    // Tampilkan tombol konfirmasi manual
+    document.getElementById('btn-connect').style.display = 'block';
     if (S.businessId) _startConnectionPolling();
   }
 }
@@ -1729,6 +1769,7 @@ function _startConnectionPolling() {
       if (data.connected) {
         clearInterval(_qrPollInterval);
         _qrPollInterval = null;
+        if (_qrCountdownInterval) { clearInterval(_qrCountdownInterval); _qrCountdownInterval = null; }
         // Auto-trigger simulateConnect UI
         simulateConnect();
       }
@@ -1740,14 +1781,11 @@ function _startConnectionPolling() {
 
 function refreshQR() {
   if (_qrPollInterval) { clearInterval(_qrPollInterval); _qrPollInterval = null; }
+  if (_qrCountdownInterval) { clearInterval(_qrCountdownInterval); _qrCountdownInterval = null; }
   const g = document.getElementById('qr-grid');
-  if (g) { g.style.opacity = '0'; setTimeout(() => { g.style.opacity = '1'; generateQR(); }, 200); }
-}
-
-function refreshQR() {
-  const g = document.getElementById('qr-grid');
+  if (!g) return;
   g.style.cssText += 'transition:opacity 0.2s;opacity:0';
-  setTimeout(() => { generateQR(); g.style.opacity = '1'; }, 200);
+  setTimeout(() => { g.style.opacity = '1'; generateQR(); }, 200);
 }
 
 // ── CONNECT SIMULATE ─────────────────────────────────────────
