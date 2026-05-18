@@ -1645,8 +1645,9 @@ function downloadAllScripts() {
   a.click(); URL.revokeObjectURL(a.href);
 }
 
-// ── QR REAL dari Fonnte ───────────────────────────────────────
-let _qrPollInterval = null;
+// ── QR REAL dari Baileys ──────────────────────────────────────
+let _qrPollInterval    = null;  // polling /api/get-qr (QR image)
+let _connPollInterval  = null;  // polling /api/check-connection
 let _qrCountdownInterval = null;
 
 function _startQRCountdown() {
@@ -1661,8 +1662,7 @@ function _startQRCountdown() {
     if (secs <= 0) {
       clearInterval(_qrCountdownInterval);
       _qrCountdownInterval = null;
-      if (noteEl) noteEl.textContent = 'QR kedaluwarsa — klik Refresh';
-      // Auto refresh QR
+      if (noteEl) noteEl.textContent = 'QR kedaluwarsa — memuat ulang...';
       refreshQR();
     }
   }, 1000);
@@ -1672,20 +1672,20 @@ async function generateQR() {
   const grid = document.getElementById('qr-grid');
   if (!grid) return;
 
-  // Tampilkan loading dulu
+  // Tampilkan loading
   grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:20px;color:var(--text2);font-size:13px;">
     <div class="spin-ring" style="margin:0 auto 12px;"></div>
-    Menyiapkan QR code...
+    Menyiapkan sesi WhatsApp...
   </div>`;
 
-  // Jika belum ada businessId (onboarding belum selesai), pakai fake QR
+  // Tanpa businessId → fake QR
   if (!S.businessId && !S.bizWa) {
     _renderFakeQR(grid);
     return;
   }
 
   try {
-    // Panggil backend untuk setup device dan dapat QR
+    // 1. Minta backend mulai sesi Baileys (async — QR belum tentu langsung ada)
     const resp = await fetch(`${BACKEND_URL}/api/setup-device`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1699,42 +1699,68 @@ async function generateQR() {
 
     const data = await resp.json();
 
-    if (data.qrCode) {
-      // Tampilkan QR nyata sebagai gambar
-      grid.innerHTML = `<img src="${data.qrCode}" alt="QR Code WhatsApp"
-        style="width:100%;height:100%;object-fit:contain;border-radius:8px;"
-        onerror="this.parentElement.innerHTML='<div style=padding:16px;color:var(--text2);font-size:12px;>QR tidak tersedia. Refresh halaman.</div>'"
-      >`;
+    // Sudah connected sebelumnya?
+    if (data.status === 'already_connected') {
+      simulateConnect();
+      return;
+    }
 
-      // Simpan device token
-      if (data.deviceToken) S.deviceToken = data.deviceToken;
-
-      // Mulai countdown 60 detik
-      _startQRCountdown();
-
-      // Mulai polling status koneksi setiap 3 detik
+    // 2. Mulai polling /api/get-qr/:businessId setiap 2 detik
+    if (S.businessId) {
+      _startQRPolling(grid);
       _startConnectionPolling();
-
     } else {
-      // Fallback: tampilkan instruksi manual + tampilkan tombol manual confirm
-      grid.innerHTML = `<div style="grid-column:1/-1;padding:16px;text-align:center;color:var(--text2);font-size:12px;line-height:1.6;">
-        <div style="font-size:28px;margin-bottom:8px;">📱</div>
-        <strong style="color:var(--text);">Setup Manual</strong><br>
-        Buka <b>app.fonnte.com</b> → Add Device → isi nomor <b>${S.bizWa}</b> → Connect → scan QR
-      </div>`;
-      document.getElementById('btn-connect').style.display = 'block';
-
-      // Tetap polling kalau sudah setup manual
-      if (S.businessId) _startConnectionPolling();
+      _renderFakeQR(grid);
     }
 
   } catch (err) {
-    console.warn('QR fetch error:', err.message);
+    console.warn('Setup device error:', err.message);
     _renderFakeQR(grid);
-    // Tampilkan tombol konfirmasi manual
     document.getElementById('btn-connect').style.display = 'block';
     if (S.businessId) _startConnectionPolling();
   }
+}
+
+// Polling /api/get-qr setiap 2 detik sampai QR muncul
+function _startQRPolling(grid) {
+  if (_qrPollInterval) clearInterval(_qrPollInterval);
+  let attempts = 0;
+
+  _qrPollInterval = setInterval(async () => {
+    attempts++;
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/get-qr/${S.businessId}`);
+      const data = await resp.json();
+
+      if (data.status === 'connected') {
+        // Sudah connected saat polling
+        clearInterval(_qrPollInterval); _qrPollInterval = null;
+        simulateConnect();
+        return;
+      }
+
+      if (data.status === 'qr_ready' && data.qr) {
+        clearInterval(_qrPollInterval); _qrPollInterval = null;
+        // Tampilkan QR image (data URL dari server)
+        grid.innerHTML = `<img src="${data.qr}" alt="QR Code WhatsApp"
+          style="width:100%;height:100%;object-fit:contain;border-radius:8px;"
+          onerror="this.parentElement.innerHTML='<div style=padding:16px;color:var(--text2);font-size:12px;text-align:center;>QR error. Klik Refresh.</div>'"
+        >`;
+        _startQRCountdown();
+        return;
+      }
+
+      // Timeout setelah 30 detik (15 attempts × 2s)
+      if (attempts >= 15) {
+        clearInterval(_qrPollInterval); _qrPollInterval = null;
+        grid.innerHTML = `<div style="grid-column:1/-1;padding:16px;text-align:center;color:var(--text2);font-size:12px;line-height:1.8;">
+          <div style="font-size:28px;margin-bottom:8px;">⚠️</div>
+          QR timeout. Klik <b>Refresh QR</b> untuk coba lagi.
+        </div>`;
+      }
+
+    } catch (e) { /* silent */ }
+  }, 2000);
 }
 
 function _renderFakeQR(grid) {
@@ -1760,19 +1786,18 @@ function _renderFakeQR(grid) {
 }
 
 function _startConnectionPolling() {
-  if (_qrPollInterval) clearInterval(_qrPollInterval);
+  if (_connPollInterval) clearInterval(_connPollInterval);
   if (!S.businessId) return;
 
-  _qrPollInterval = setInterval(async () => {
+  _connPollInterval = setInterval(async () => {
     try {
       const resp = await fetch(`${BACKEND_URL}/api/check-connection/${S.businessId}`);
       const data = await resp.json();
 
       if (data.connected) {
-        clearInterval(_qrPollInterval);
-        _qrPollInterval = null;
+        clearInterval(_connPollInterval); _connPollInterval = null;
+        if (_qrPollInterval) { clearInterval(_qrPollInterval); _qrPollInterval = null; }
         if (_qrCountdownInterval) { clearInterval(_qrCountdownInterval); _qrCountdownInterval = null; }
-        // Auto-trigger simulateConnect UI
         simulateConnect();
       }
     } catch (err) {
@@ -1783,6 +1808,7 @@ function _startConnectionPolling() {
 
 function refreshQR() {
   if (_qrPollInterval) { clearInterval(_qrPollInterval); _qrPollInterval = null; }
+  if (_connPollInterval) { clearInterval(_connPollInterval); _connPollInterval = null; }
   if (_qrCountdownInterval) { clearInterval(_qrCountdownInterval); _qrCountdownInterval = null; }
   const g = document.getElementById('qr-grid');
   if (!g) return;
@@ -1798,21 +1824,6 @@ async function simulateConnect() {
 
   // Disable tombol selama proses
   if (btn) { btn.disabled = true; btn.textContent = 'Menghubungkan...'; }
-
-  // Jika sudah punya businessId dari backend, kirim ke API
-  if (S.businessId && S.bizWa) {
-    try {
-      const resp = await fetch(`${BACKEND_URL}/api/connect-whatsapp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ businessId: S.businessId, waNumber: S.bizWa }),
-        signal: AbortSignal.timeout(10000)
-      });
-      if (!resp.ok) console.warn('Connect API error:', resp.status);
-    } catch (err) {
-      console.warn('Connect API unavailable:', err.message);
-    }
-  }
 
   // Update UI ke connected
   dot.className = 'status-dot connected';
