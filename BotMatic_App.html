@@ -27,6 +27,7 @@
 <meta name="twitter:image" content="https://botmatic-frontend.vercel.app/icon-512.png">
 
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   :root {
     --bg:        #0a0a0a;
@@ -1066,7 +1067,7 @@
 
   <div class="pv-action-bar">
     <div class="pv-action-text">
-      <strong>Chatbot kamu sudah siap!</strong> Langkah berikutnya: hubungkan ke nomor WhatsApp bisnis kamu lewat Fonnte.
+      <strong>Chatbot kamu sudah siap!</strong> Langkah berikutnya: hubungkan ke nomor WhatsApp bisnis kamu dengan scan QR.
     </div>
     <button class="btn-primary" onclick="goToConnect()">Hubungkan ke WhatsApp →</button>
   </div>
@@ -1088,8 +1089,8 @@
 
     <div class="fonnte-card">
       <div class="fonnte-card-title">
-        <span>📲</span> Koneksi via Fonnte
-        <span style="font-size:10px;font-weight:500;color:var(--text3);margin-left:auto">Gratis · Buatan Indonesia</span>
+        <span>📲</span> Koneksi via WhatsApp
+        <span style="font-size:10px;font-weight:500;color:var(--text3);margin-left:auto">Gratis · Powered by Baileys</span>
       </div>
       <div class="fonnte-card-sub">Scan QR Code ini dengan WhatsApp nomor bisnis kamu</div>
 
@@ -1177,8 +1178,7 @@
     <div class="next-steps-title">📋 Langkah selanjutnya:</div>
     <div class="next-steps-list">
       ✅ Kirim pesan test ke WA bisnis kamu<br>
-      ✅ Masuk ke fonnte.com → Auto Reply → Paste script<br>
-      ✅ Aktifkan toggle Auto Reply di Fonnte<br>
+      ✅ Bot otomatis membalas pesan customer 24/7<br>
       ✅ Share nomor WA ke IG bio, Google Maps, dll<br>
       ✅ Pantau performa bot dalam 24 jam pertama
     </div>
@@ -1420,7 +1420,16 @@ function buildReview() {
 
 // ── BACKEND CONFIG ────────────────────────────────────────────
 // Ganti dengan Railway URL kamu setelah deploy
-const BACKEND_URL = window.BOTMATIC_BACKEND || 'https://web-production-f709e.up.railway.app';
+const BACKEND_URL = window.BOTMATIC_BACKEND || (location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? 'http://localhost:3000' : 'https://pointer-shallot-scam.ngrok-free.dev');
+
+// ── FETCH WRAPPER (tambah ngrok header otomatis) ──────────────
+const _origFetch = window.fetch;
+window.fetch = function(url, opts = {}) {
+  if (typeof url === 'string' && url.startsWith(BACKEND_URL)) {
+    opts.headers = Object.assign({ 'ngrok-skip-browser-warning': '1' }, opts.headers || {});
+  }
+  return _origFetch(url, opts);
+};
 
 // ── GENERATING ───────────────────────────────────────────────
 function startGenerating() {
@@ -1739,13 +1748,23 @@ function _startQRPolling(grid) {
         return;
       }
 
-      if (data.status === 'qr_ready' && data.qr) {
+      if (data.status === 'qr_ready' && (data.qrRaw || data.qr)) {
         clearInterval(_qrPollInterval); _qrPollInterval = null;
-        // Tampilkan QR image (data URL dari server)
-        grid.innerHTML = `<img src="${data.qr}" alt="QR Code WhatsApp"
-          style="width:100%;height:100%;object-fit:contain;border-radius:8px;"
-          onerror="this.parentElement.innerHTML='<div style=padding:16px;color:var(--text2);font-size:12px;text-align:center;>QR error. Klik Refresh.</div>'"
-        >`;
+        // Render QR pakai library client-side (lebih akurat)
+        grid.innerHTML = '<div id="qr-canvas-container" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;"></div>';
+        const container = document.getElementById('qr-canvas-container');
+        if (data.qrRaw && typeof QRCode !== 'undefined') {
+          new QRCode(container, {
+            text: data.qrRaw,
+            width: 256,
+            height: 256,
+            colorDark: '#000000',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.L
+          });
+        } else {
+          container.innerHTML = `<img src="${data.qr}" alt="QR Code WhatsApp" style="width:256px;height:256px;object-fit:contain;">`;
+        }
         _startQRCountdown();
         return;
       }
